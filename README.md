@@ -281,6 +281,6 @@ MIT
 ## Acknowledgments
 
 - [GRPO Demo on Kaggle](https://www.kaggle.com/code/windmaple/grpo-demo-gemma3-1b) for the training approach
-- [GSM8K dataset](https://huggingface.co/datasets/gsm8k) for evaluation
+- [GSM8K dataset](https://huggingface.co/datasets/openai/gsm8k) for evaluation
 - HuggingFace PEFT library for LoRA adapter support
 
