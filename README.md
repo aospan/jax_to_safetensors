@@ -99,9 +99,9 @@ EVALUATION RESULTS
 Accuracy: 13.75% (55/400), Partial: 16.50%, Formatted: 48.75%
 ```
 
-### 📈 Performance Improvement
+### Performance Improvement
 
-The LoRA-adapted model shows a **significant accuracy jump from 13.75% to 44.25%** on GSM8K, demonstrating the effectiveness of the fine-tuning approach.
+The LoRA-adapted model shows a **significant accuracy jump from 13.75% to 44.25%** on GSM8K.
 
 ## Interactive Chat Interface
 
@@ -147,46 +147,130 @@ day.
 
 Notice how the LoRA model properly formats its answer with the `<answer>` tags, showing improved instruction-following capability.
 
-## Command-Line Options
-
-### `jax_to_safetensors.py`
-
-```bash
-python3 jax_to_safetensors.py --npz <path_to_npz> --out_dir <output_directory>
-```
-
-### `eval_safetensors_gsm8k.py`
-
-```bash
-python3 eval_safetensors_gsm8k.py \
-    --base_id <model_id> \
-    --adapter_dir <path_to_adapter> \
-    --num_samples 400 \
-    --batch_size 64 \
-    --max_new_tokens 768 \
-    --dtype bf16 \
-    --save_outputs <output.json>
-```
-
-### `chat.py`
-
-```bash
-python3 chat.py \
-    --base_id <model_id> \
-    --adapter_dir <path_to_adapter> \
-    --dtype bf16
-```
-
 ## Evaluation Metrics
 
 - **Accuracy**: Percentage of problems where the model provides the correct answer in the expected `<answer>` tag format
 - **Partial**: Percentage where the correct answer appears anywhere in the output
 - **Formatted**: Percentage of responses that properly use the `<answer>` tag format
 
+## Dive Deep: Understanding the File Formats
+
+This section explains the binary file formats involved in the conversion process.
+
+### NPZ Format (Input)
+
+NPZ is a zipped archive containing multiple individual `.npy` files, each representing one NumPy array.
+
+Let's extract the NPZ file obtained from training:
+
+```bash
+unzip -l trained_lora_leaves_final.npz
+```
+
+```
+Archive:  trained_lora_leaves_final.npz
+ extracting: layers/0/attn/attn_vec_einsum/w_lora_a/value.npy
+ extracting: layers/0/attn/attn_vec_einsum/w_lora_b/value.npy
+ extracting: layers/0/attn/kv_einsum/w_lora_a/value.npy
+ extracting: layers/0/attn/kv_einsum/w_lora_b/value.npy
+ extracting: layers/0/attn/q_einsum/w_lora_a/value.npy
+ extracting: layers/0/attn/q_einsum/w_lora_b/value.npy
+...
+```
+
+Let's explore one `.npy` file with a hex dump:
+
+```bash
+xxd -l 128 layers/0/attn/attn_vec_einsum/w_lora_a/value.npy
+```
+
+```
+00000000: 934e 554d 5059 0100 7600 7b27 6465 7363  .NUMPY..v.{'desc
+00000010: 7227 3a20 273c 5632 272c 2027 666f 7274  r': '<V2', 'fort
+00000020: 7261 6e5f 6f72 6465 7227 3a20 4661 6c73  ran_order': Fals
+00000030: 652c 2027 7368 6170 6527 3a20 2834 2c20  e, 'shape': (4, 
+00000040: 3235 362c 2036 3429 2c20 7d20 2020 2020  256, 64), }     
+00000050: 2020 2020 2020 2020 2020 2020 2020 2020                  
+00000060: 2020 2020 2020 2020 2020 2020 2020 2020                  
+00000070: 2020 2020 2020 2020 2020 2020 2020 200a                 .
+```
+
+According to the [NumPy Format Specification](https://numpy.org/neps/nep-0001-npy-format.html), the file starts with:
+- Magic string: `\x93NUMPY`
+- Version bytes
+- Header describing the array (a Python dictionary with `dtype`, `fortran_order`, and `shape`)
+- The most important field is `shape`: `(4, 256, 64)` in this example
+
+The header is followed by the raw binary array data.
+
+### Safetensors Format (Output)
+
+Let's examine the converted safetensors file:
+
+```bash
+xxd -l 128 peft_adapter/adapter_model.safetensors
+```
+
+```
+00000000: d8bc 0000 0000 0000 7b22 6261 7365 5f6d  ........{"base_m
+00000010: 6f64 656c 2e6d 6f64 656c 2e6d 6f64 656c  odel.model.model
+00000020: 2e6c 6179 6572 732e 302e 6d6c 702e 646f  .layers.0.mlp.do
+00000030: 776e 5f70 726f 6a2e 6c6f 7261 5f41 2e77  wn_proj.lora_A.w
+00000040: 6569 6768 7422 3a7b 2264 7479 7065 223a  eight":{"dtype":
+00000050: 2246 3136 222c 2273 6861 7065 223a 5b36  "F16","shape":[6
+00000060: 342c 3639 3132 5d2c 2264 6174 615f 6f66  4,6912],"data_of
+00000070: 6673 6574 7322 3a5b 302c 3838 3437 3336  fsets":[0,884736
+```
+
+According to the [safetensors format specification](https://huggingface.co/docs/safetensors/en/index), the format is: **header JSON + binary blobs**.
+
+From the hex dump above:
+- `dtype: "F16"` → float16
+- `shape: [64, 6912]` → tensor dimensions
+- `data_offsets: [0, 884736]` → byte range where this tensor's data is stored
+
+The tensor name `base_model.model.model.layers.0.mlp.down_proj.lora_A.weight` tells us:
+- `base_model.model.model` → PEFT wraps a base HuggingFace model as `self.base_model`
+- `.layers.0.mlp.down_proj` → target module in the base model
+- `.lora_A.weight` → LoRA A matrix for that module
+
+### PEFT Adapter Configuration
+
+The `adapter_config.json` file tells PEFT how and where to plug the LoRA weights into the base model:
+
+```bash
+cat peft_adapter/adapter_config.json
+```
+
+```json
+{
+  "peft_type": "LORA",
+  "task_type": "CAUSAL_LM",
+  "r": 64,
+  "lora_alpha": 64,
+  "lora_dropout": 0.0,
+  "bias": "none",
+  "target_modules": [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj"
+  ]
+}
+```
+
+Key parameters:
+- `r: 64` → LoRA rank (dimensionality of the low-rank adaptation)
+- `lora_alpha: 64` → LoRA scaling factor
+- `target_modules` → Which layers in the base model receive LoRA adapters
+
 ## Use Cases
 
 - Converting JAX-trained LoRA models to PyTorch for production deployment
-- Training on **Google's TPU** (Kaggle) and deploying on **GPU** infrastructure for inference
+- Training on **Google's TPU** and deploying on **GPU** infrastructure for inference
 - Benchmarking fine-tuned models on math reasoning tasks
 - Comparing base model vs. fine-tuned model performance
 
